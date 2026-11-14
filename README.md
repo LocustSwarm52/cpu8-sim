@@ -2,7 +2,7 @@
 
 An 8-bit CPU simulator that runs in the browser, with its own assembly language and a two-pass assembler. Write a program, assemble it, and step through it while the registers, flags and all 256 bytes of memory update live.
 
-**Live demo:** `https://<your-username>.github.io/cpu8-sim/`
+**Live demo:** `https://LocustSwarm52.github.io/cpu8-sim/`
 
 ## Features
 
