@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>cpu8-sim | 8-bit CPU simulator</title>
+<style>
+  :root { --ink:#1b1b1b; --dim:#777; --line:#cfcfcf; --bg:#fafaf8; --hot:#d9480f; --pc:#1c7ed6; --sp:#2b8a3e; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:14px/1.4 ui-monospace, Menlo, Consolas, monospace; color:var(--ink); background:var(--bg); }
+  header { padding:14px 20px; border-bottom:1px solid var(--line); display:flex; gap:16px; align-items:baseline; flex-wrap:wrap; }
+  header h1 { font-size:16px; margin:0; }
+  header span { color:var(--dim); }
+  main { display:grid; grid-template-columns: minmax(280px, 1fr) minmax(420px, 1.3fr); gap:20px; padding:20px; }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+  section { border:1px solid var(--line); background:#fff; padding:12px; }
+  h2 { font-size:12px; text-transform:uppercase; letter-spacing:.08em; color:var(--dim); margin:0 0 8px; font-weight:600; }
+  textarea { width:100%; height:420px; font:13px/1.5 inherit; border:1px solid var(--line); padding:8px; resize:vertical; tab-size:8; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin:8px 0; }
+  button, select { font:inherit; border:1px solid var(--ink); background:#fff; padding:5px 10px; cursor:pointer; }
+  button:hover { background:var(--ink); color:#fff; }
+  button:disabled { opacity:.4; cursor:default; background:#fff; color:var(--ink); }
+  #msg { min-height:1.4em; color:var(--dim); }
+  #msg.err { color:var(--hot); }
+  .regs { display:grid; grid-template-columns: repeat(4, 1fr); gap:8px; }
+  .reg { border:1px solid var(--line); padding:6px 8px; transition: background .4s; }
+  .reg b { display:block; font-size:11px; color:var(--dim); font-weight:600; }
+  .reg .v { font-size:18px; }
+  .reg .bin { font-size:11px; color:var(--dim); }
+  .reg.flash { background:#fff1e6; }
+  .flags span { display:inline-block; width:22px; text-align:center; border:1px solid var(--line); margin-right:4px; color:var(--dim); }
+  .flags span.on { background:var(--ink); color:#fff; border-color:var(--ink); }
+  #ram { display:grid; grid-template-columns: 28px repeat(16, 1fr); font-size:11px; }
+  #ram div { text-align:center; padding:2px 0; border-right:1px solid #eee; border-bottom:1px solid #eee; }
+  #ram .hdr { color:var(--dim); border:none; }
+  #ram .pc { background:var(--pc); color:#fff; }
+  #ram .arg { background:#d0ebff; }
+  #ram .sp { outline:2px solid var(--sp); outline-offset:-2px; }
+  #ram .w { background:var(--hot); color:#fff; }
+  #ram .z { color:#ccc; }
+  #out { min-height:2.4em; font-size:16px; word-break:break-word; }
+  #now { color:var(--pc); }
+  .legend span { margin-right:12px; font-size:11px; color:var(--dim); }
+  .legend i { display:inline-block; width:10px; height:10px; vertical-align:-1px; margin-right:4px; }
+  details { margin-top:12px; }
+  table.isa { border-collapse:collapse; font-size:12px; }
+  table.isa td { padding:1px 10px 1px 0; }
+  footer { padding:0 20px 20px; color:var(--dim); font-size:12px; }
+  a { color:inherit; }
+</style>
+</head>
+<body>
+<header>
+  <h1>cpu8-sim</h1>
+  <span>An 8-bit CPU with its own assembly language and two-pass assembler</span>
+</header>
+<main>
+  <section>
+    <h2>Program</h2>
+    <div class="row">
+      <select id="examples" aria-label="Example programs"></select>
+      <button id="assemble">Assemble</button>
+    </div>
+    <textarea id="src" spellcheck="false" aria-label="Assembly source"></textarea>
+    <div id="msg"></div>
+    <details>
+      <summary>Instruction set</summary>
+      <table class="isa" id="isa"></table>
+    </details>
+  </section>
+
+  <div style="display:grid; gap:20px; align-content:start">
+    <section>
+      <h2>Control</h2>
+      <div class="row">
+        <button id="step">Step</button>
+        <button id="run">Run</button>
+        <button id="reset">Reset</button>
+        <label>Speed <input id="speed" type="range" min="1" max="60" value="12"></label>
+        <span id="cycles"></span>
+      </div>
+      <div>Next: <span id="now">-</span></div>
+    </section>
+
+    <section>
+      <h2>Registers</h2>
+      <div class="regs" id="regs"></div>
+      <div class="row flags" id="flags"></div>
+    </section>
+
+    <section>
+      <h2>Output</h2>
+      <div id="out"></div>
+    </section>
+
+    <section>
+      <h2>Memory (256 bytes)</h2>
+      <div id="ram"></div>
+      <div class="row legend">
+        <span><i style="background:var(--pc)"></i>PC</span>
+        <span><i style="background:#d0ebff"></i>operand</span>
+        <span><i style="outline:2px solid var(--sp);outline-offset:-2px"></i>SP</span>
+        <span><i style="background:var(--hot)"></i>last write</span>
+      </div>
+    </section>
+  </div>
+</main>
+<footer>Built by Nicholas Starr. Source and tests on GitHub.</footer>
+
+<script src="cpu.js"></script>
+<script src="examples.js"></script>
+<script>
+(function () {
+  const { CPU, assemble, disassemble, ISA, hex } = CPU8;
+  const $ = (id) => document.getElementById(id);
+  const cpu = new CPU();
+  let program = null;
+  let timer = null;
+  let prevRegs = {};
+
+  // ---- build static UI ----
+  for (const name of Object.keys(CPU8_EXAMPLES)) {
+    const o = document.createElement('option');
+    o.textContent = name;
+    $('examples').appendChild(o);
+  }
+  const forms = { none: '', imm: ' #n', addr: ' addr', ind: ' [B]' };
+  const isaRows = [];
+  for (let i = 0; i < ISA.length; i += 3) {
+    isaRows.push('<tr>' + ISA.slice(i, i + 3).map(([m, mode, op]) =>
+      '<td>' + hex(op) + '</td><td><b>' + m + '</b>' + forms[mode] + '</td>').join('') + '</tr>');
+  }
+  $('isa').innerHTML = isaRows.join('');
+
+  const regNames = ['A', 'B', 'PC', 'SP'];
+  $('regs').innerHTML = regNames.map((r) =>
+    `<div class="reg" id="r${r}"><b>${r}</b><span class="v"></span><div class="bin"></div></div>`).join('');
+  $('flags').innerHTML = ['Z', 'C', 'N'].map((f) => `<span id="f${f}" title="${f} flag">${f}</span>`).join('');
+
+  const ram = $('ram');
+  ram.appendChild(cell('', 'hdr'));
+  for (let c = 0; c < 16; c++) ram.appendChild(cell(hex(c, 1), 'hdr'));
+  const cells = [];
+  for (let r = 0; r < 16; r++) {
+    ram.appendChild(cell(hex(r, 1) + '0', 'hdr'));
+    for (let c = 0; c < 16; c++) { const d = cell('00'); cells.push(d); ram.appendChild(d); }
+  }
+  function cell(text, cls) { const d = document.createElement('div'); d.textContent = text; if (cls) d.className = cls; return d; }
+
+  // ---- behaviour ----
+  function load(name) { $('src').value = CPU8_EXAMPLES[name]; build(); }
+
+  function build() {
+    stop();
+    try {
+      program = assemble($('src').value);
+      cpu.reset(program.bytes);
+      const nl = Object.keys(program.labels).length;
+      msg(`Assembled ${program.size} bytes, ${nl} label${nl === 1 ? '' : 's'}.`);
+    } catch (e) {
+      program = null;
+      cpu.reset();
+      msg(e.message, true);
+    }
+    prevRegs = {};
+    render();
+  }
+
+  function msg(text, err) { $('msg').textContent = text; $('msg').className = err ? 'err' : ''; }
+
+  function step() {
+    if (!program) return;
+    cpu.step();
+    if (cpu.error) msg(cpu.error, true);
+    else if (cpu.halted) msg('Halted after ' + cpu.cycles + ' instructions.');
+    if (cpu.halted) stop();
+    render();
+  }
+
+  function run() {
+    if (timer) { stop(); return; }
+    if (!program || cpu.halted) return;
+    $('run').textContent = 'Pause';
+    const tick = () => { step(); if (timer) timer = setTimeout(tick, 1000 / $('speed').value); };
+    timer = setTimeout(tick, 0);
+  }
+  function stop() { clearTimeout(timer); timer = null; $('run').textContent = 'Run'; }
+
+  function render() {
+    const vals = { A: cpu.A, B: cpu.B, PC: cpu.PC, SP: cpu.SP };
+    for (const r of regNames) {
+      const el = $('r' + r);
+      el.querySelector('.v').textContent = '0x' + hex(vals[r]) + '  ' + vals[r];
+      el.querySelector('.bin').textContent = vals[r].toString(2).padStart(8, '0');
+      if (prevRegs[r] !== undefined && prevRegs[r] !== vals[r]) {
+        el.classList.add('flash');
+        setTimeout(() => el.classList.remove('flash'), 300);
+      }
+    }
+    prevRegs = vals;
+    for (const f of ['Z', 'C', 'N']) $('f' + f).classList.toggle('on', cpu[f]);
+
+    const { text, size } = disassemble(cpu.mem, cpu.PC);
+    $('now').textContent = cpu.halted ? (cpu.error ? 'error' : 'halted') : `0x${hex(cpu.PC)}  ${text}`;
+    for (let i = 0; i < 256; i++) {
+      const v = cpu.mem[i];
+      const d = cells[i];
+      d.textContent = hex(v);
+      let cls = v === 0 ? 'z' : '';
+      if (i === cpu.PC) cls = 'pc';
+      else if (size === 2 && i === ((cpu.PC + 1) & 0xff)) cls = 'arg';
+      if (i === cpu.lastWrite) cls = 'w';
+      if (i === cpu.SP) cls += ' sp';
+      d.className = cls;
+      d.title = `0x${hex(i)} = ${v}`;
+    }
+    $('out').textContent = cpu.output.length ? cpu.output.join('  ') : '(nothing yet)';
+    $('cycles').textContent = cpu.cycles + ' instructions';
+    $('step').disabled = !program || cpu.halted;
+    $('run').disabled = !program || (cpu.halted && !timer);
+  }
+
+  $('examples').onchange = (e) => load(e.target.value);
+  $('assemble').onclick = build;
+  $('step').onclick = () => { stop(); step(); };
+  $('run').onclick = run;
+  $('reset').onclick = build;
+  $('src').addEventListener('keydown', (e) => {
+    if (e.key === 'Tab') { e.preventDefault(); document.execCommand('insertText', false, '\t'); }
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) build();
+  });
+
+  load(Object.keys(CPU8_EXAMPLES)[0]);
+})();
+</script>
+</body>
+</html>
